@@ -83,6 +83,7 @@ jobs:
           files: output/*.mp4
           tag_name: build-${{ github.run_id }}
           name: "Manga AI Export - Build ${{ github.run_number }}"
+          make_latest: true
           body: |
             Processing Metadata:
             - URL Source: ${{ github.event.inputs.url }}
