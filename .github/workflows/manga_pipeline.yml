@@ -1,4 +1,4 @@
-name: Manga-To-Video-AI-Ultimate
+name: Manga-To-Video
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       url:
         description: 'Manga Download URL (CBZ/Zip)'
         required: true
-        default: 'https://github.com/SCPF-Bot/repo.001/releases/download/manga.manhwa/0-eng-li_63aa2c.cbz'
+        default: ''
       ocr_engine:
         type: choice
         description: 'Primary OCR Engine'
