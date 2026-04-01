@@ -1,0 +1,93 @@
+name: Manga-To-Video-AI-Ultimate
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Manga Download URL (CBZ/Zip)'
+        required: true
+        default: 'https://github.com/SCPF-Bot/repo.001/releases/download/manga.manhwa/0-eng-li_63aa2c.cbz'
+      ocr_engine:
+        type: choice
+        description: 'Primary OCR Engine'
+        options:
+          - google_vision
+          - manga_ocr
+          - paddle_ocr
+          - comic_text_detector
+          - tesseract
+        default: 'google_vision'
+      tts_engine:
+        type: choice
+        description: 'Primary TTS Engine'
+        options:
+          - elevenlabs
+          - fish_speech
+          - xtts_v2
+          - chat_tts
+          - melo_tts
+          - deepgram_aura
+          - edge_tts
+        default: 'edge_tts'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg tesseract-ocr libtesseract-dev libmagic1
+
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Python Requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Processing Pipeline
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_JSON }}
+          ELEVENLABS_API_KEY: ${{ secrets.EL_KEY }}
+          DEEPGRAM_KEY: ${{ secrets.DEEPGRAM_KEY }}
+          FISH_KEY: ${{ secrets.FISH_KEY }}
+          MANGA_URL: ${{ github.event.inputs.url }}
+        run: |
+          if [ -n "$GOOGLE_APPLICATION_CREDENTIALS_JSON" ]; then
+            echo "$GOOGLE_APPLICATION_CREDENTIALS_JSON" > google_creds.json
+            export GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/google_creds.json
+          fi
+          
+          python scripts/core_pipeline.py \
+            --url "${{ github.event.inputs.url }}" \
+            --ocr "${{ github.event.inputs.ocr_engine }}" \
+            --tts "${{ github.event.inputs.tts_engine }}"
+
+      - name: Upload Results to Release
+        uses: softprops/action-gh-release@v2
+        if: success()
+        with:
+          files: output/*.mp4
+          tag_name: build-${{ github.run_id }}
+          name: "Manga AI Export - Build ${{ github.run_number }}"
+          body: |
+            Processing Metadata:
+            - URL Source: ${{ github.event.inputs.url }}
+            - OCR Engine: ${{ github.event.inputs.ocr_engine }}
+            - TTS Engine: ${{ github.event.inputs.tts_engine }}
+            - Status: Success
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
