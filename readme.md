@@ -66,14 +66,24 @@ Once finished, the video will appear in the Releases section of your repository.
 ## 📈 6. Local Development
 To run this on your local machine:
  * Install Binaries:
-   # Ubuntu/Debian
-sudo apt install ffmpeg tesseract-ocr
+   
+   Ubuntu/Debian
+   
+   ```
+   sudo apt install ffmpeg tesseract-ocr
+   ```
 
  * Install Python Libs:
+
+   ```
    pip install -r requirements.txt
+   ```
 
  * Execute:
+   
+   ```
    python scripts/core_pipeline.py --url "YOUR_URL" --ocr "manga_ocr" --tts "edge_tts"
+   ```
 
 ## 🦋 7. Repository Diagram
 
