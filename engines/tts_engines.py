@@ -4,60 +4,75 @@ import requests
 import torch
 import wave
 import numpy as np
+import subprocess
 from pathlib import Path
-import time
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class TTSEngine:
+    """TTS Engine with comprehensive failover and fallback mechanisms."""
+    
     def __init__(self, engine_type="edge_tts"):
         self.engine_type = engine_type
-        self.model = None
-        self.initialized_models = {}  # Support multiple model types
-        print(f"Initialized TTS Engine: {self.engine_type}")
+        self.models = {}
+        logger.info(f"Initialized TTS Engine: {self.engine_type}")
 
     async def generate(self, text, output_path):
         """Orchestrator for TTS generation with silent fallback logic."""
         # Validate input
         if not text or len(text.strip()) < 2:
-            print(f"Text too short or empty, generating silence")
+            logger.info(f"Text too short or empty, generating silence")
             return self._generate_silence(output_path)
 
-        # Clean text for better TTS (remove excessive newlines, special chars)
+        # Clean text for better TTS
         text = self._clean_text(text)
+        
+        # Limit text length to prevent API issues
+        if len(text) > 5000:
+            text = text[:5000]
+            logger.info(f"Truncated text to 5000 chars")
 
-        try:
-            if self.engine_type == "elevenlabs":
-                return self._tts_elevenlabs(text, output_path)
-            
-            elif self.engine_type == "deepgram_aura":
-                return self._tts_deepgram(text, output_path)
-            
-            elif self.engine_type == "fish_speech":
-                return self._tts_fish_api(text, output_path)
-
-            elif self.engine_type == "melo_tts":
-                return self._tts_melo(text, output_path)
-
-            elif self.engine_type == "chat_tts":
-                return self._tts_chat(text, output_path)
-
-            elif self.engine_type == "xtts_v2":
-                return self._tts_xtts(text, output_path)
-
-            else:
-                return await self._tts_edge(text, output_path)
-
-        except Exception as e:
-            print(f"TTS Failure on {self.engine_type}: {e}. Falling back to Edge-TTS.")
+        # Try the selected engine with fallbacks
+        engines_to_try = [self.engine_type, "edge_tts"]  # Always fallback to edge_tts
+        
+        for engine in engines_to_try:
             try:
-                return await self._tts_edge(text, output_path)
-            except Exception as fallback_error:
-                print(f"Edge-TTS fallback also failed: {fallback_error}")
-                return self._generate_silence(output_path)
+                if engine == "elevenlabs":
+                    success = self._tts_elevenlabs(text, output_path)
+                elif engine == "deepgram_aura":
+                    success = self._tts_deepgram(text, output_path)
+                elif engine == "fish_speech":
+                    success = self._tts_fish_api(text, output_path)
+                elif engine == "melo_tts":
+                    success = self._tts_melo(text, output_path)
+                elif engine == "chat_tts":
+                    success = self._tts_chat(text, output_path)
+                elif engine == "xtts_v2":
+                    success = self._tts_xtts(text, output_path)
+                else:
+                    success = await self._tts_edge(text, output_path)
+                
+                if success and Path(output_path).exists() and Path(output_path).stat().st_size > 0:
+                    logger.info(f"TTS successful using {engine}, size: {Path(output_path).stat().st_size} bytes")
+                    return True
+                else:
+                    logger.warning(f"TTS engine {engine} produced empty or failed output")
+                    
+            except Exception as e:
+                logger.error(f"TTS engine {engine} failed: {e}")
+                continue
+        
+        # Ultimate fallback - generate silence
+        logger.error(f"All TTS engines failed for text: {text[:50]}...")
+        return self._generate_silence(output_path)
 
     def _clean_text(self, text):
         """Clean text for better TTS pronunciation."""
         # Remove excessive whitespace
         text = ' '.join(text.split())
+        
         # Replace common problematic characters
         replacements = {
             '…': '...',
@@ -65,26 +80,39 @@ class TTSEngine:
             '–': '-',
             '"': "'",
             '"': "'",
+            '\u201c': '"',  # Left double quotation mark
+            '\u201d': '"',  # Right double quotation mark
+            '\u2018': "'",  # Left single quotation mark
+            '\u2019': "'",  # Right single quotation mark
         }
         for old, new in replacements.items():
             text = text.replace(old, new)
-        return text
+        
+        # Remove any remaining non-printable characters
+        text = ''.join(char for char in text if char.isprintable() or char == '\n')
+        
+        return text.strip()
 
     async def _tts_edge(self, text, output_path):
         """Free, reliable Microsoft Neural TTS."""
         try:
             from edge_tts import Communicate
-            # Use a more natural voice with better pacing
+            # Use a natural voice with good pacing
             communicate = Communicate(text, "en-US-JennyNeural")
             await communicate.save(output_path)
             
             # Verify file was created
-            if not Path(output_path).exists() or Path(output_path).stat().st_size == 0:
+            if Path(output_path).exists() and Path(output_path).stat().st_size > 0:
+                return True
+            else:
                 raise Exception("Edge-TTS produced empty file")
-            return True
+                
         except ImportError:
-            print("Edge-TTS not installed, generating silence")
-            return self._generate_silence(output_path)
+            logger.error("Edge-TTS not installed")
+            raise
+        except Exception as e:
+            logger.error(f"Edge-TTS error: {e}")
+            raise
 
     def _tts_elevenlabs(self, text, output_path):
         """ElevenLabs API with better error handling."""
@@ -92,11 +120,11 @@ class TTSEngine:
         if not key:
             raise Exception("ELEVENLABS_API_KEY not set")
         
-        # Use a more reliable voice (Adam) that's always available
+        # Use a reliable voice that's always available
         url = "https://api.elevenlabs.io/v1/text-to-speech/Xb7hH8MSUJpSbSDYk0k2"  # Adam voice
         headers = {"xi-api-key": key, "Content-Type": "application/json"}
         data = {
-            "text": text[:5000],  # ElevenLabs has character limits
+            "text": text[:5000],
             "model_id": "eleven_monolingual_v1",
             "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
         }
@@ -109,6 +137,7 @@ class TTSEngine:
                 return True
             else:
                 raise Exception(f"ElevenLabs Error {res.status_code}: {res.text}")
+                
         except requests.RequestException as e:
             raise Exception(f"ElevenLabs request failed: {e}")
 
@@ -120,7 +149,7 @@ class TTSEngine:
         
         url = "https://api.deepgram.com/v1/speak?model=aura-helios-en"
         headers = {"Authorization": f"Token {key}", "Content-Type": "application/json"}
-        data = {"text": text[:2000]}  # Deepgram character limit
+        data = {"text": text[:2000]}
         
         try:
             res = requests.post(url, json=data, headers=headers, timeout=30)
@@ -129,11 +158,10 @@ class TTSEngine:
                     f.write(res.content)
                 return True
             else:
-                print(f"Deepgram returned {res.status_code}: {res.text}")
-                return False
+                raise Exception(f"Deepgram returned {res.status_code}: {res.text}")
+                
         except requests.RequestException as e:
-            print(f"Deepgram request failed: {e}")
-            return False
+            raise Exception(f"Deepgram request failed: {e}")
 
     def _tts_fish_api(self, text, output_path):
         """Fish Speech V1.5 API Integration."""
@@ -144,9 +172,9 @@ class TTSEngine:
         url = "https://api.fish.audio/v1/tts"
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         data = {
-            "text": text[:1000],  # Fish API character limit
+            "text": text[:1000],
             "format": "mp3",
-            "voice": "taylor"  # Default voice
+            "voice": "taylor"
         }
         
         try:
@@ -156,33 +184,32 @@ class TTSEngine:
                     f.write(res.content)
                 return True
             else:
-                print(f"Fish API returned {res.status_code}: {res.text}")
-                return False
+                raise Exception(f"Fish API returned {res.status_code}: {res.text}")
+                
         except requests.RequestException as e:
-            print(f"Fish API request failed: {e}")
-            return False
+            raise Exception(f"Fish API request failed: {e}")
 
     def _tts_melo(self, text, output_path):
-        """MeloTTS - Optimized for CPU with better error handling."""
+        """MeloTTS - Optimized for CPU."""
         try:
             from melotts.api import TTS
         except ImportError:
-            print("MeloTTS not installed")
+            logger.error("MeloTTS not installed")
             raise
-            
+        
         try:
-            if "melo" not in self.initialized_models:
-                # Load model with CPU optimization
-                self.initialized_models["melo"] = TTS(language='EN', device='cpu')
-                print("MeloTTS model loaded")
+            model_key = "melo"
+            if model_key not in self.models:
+                self.models[model_key] = TTS(language='EN', device='cpu')
+                logger.info("MeloTTS model loaded")
             
-            model = self.initialized_models["melo"]
+            model = self.models[model_key]
             speaker_ids = model.hps.data.spk2id
             
-            # Limit text length to avoid memory issues
+            # Limit text length
             if len(text) > 500:
                 text = text[:500]
-                print(f"Truncated text to 500 chars for MeloTTS")
+                logger.info(f"Truncated text to 500 chars for MeloTTS")
             
             # Generate speech
             model.tts_to_file(text, speaker_ids['EN-Default'], output_path, speed=0.9)
@@ -194,7 +221,7 @@ class TTSEngine:
                 raise Exception("MeloTTS produced empty file")
                 
         except Exception as e:
-            print(f"MeloTTS error: {e}")
+            logger.error(f"MeloTTS error: {e}")
             raise
 
     def _tts_chat(self, text, output_path):
@@ -202,47 +229,44 @@ class TTSEngine:
         try:
             import ChatTTS
         except ImportError:
-            print("ChatTTS not installed")
+            logger.error("ChatTTS not installed")
             raise
-            
+        
         try:
-            if "chat" not in self.initialized_models:
-                self.initialized_models["chat"] = ChatTTS.Chat()
-                self.initialized_models["chat"].load_models(device='cpu')
-                print("ChatTTS model loaded")
+            model_key = "chat"
+            if model_key not in self.models:
+                self.models[model_key] = ChatTTS.Chat()
+                self.models[model_key].load_models(device='cpu')
+                logger.info("ChatTTS model loaded")
             
-            model = self.initialized_models["chat"]
+            model = self.models[model_key]
             
             # Limit text length
             if len(text) > 500:
                 text = text[:500]
-                print(f"Truncated text to 500 chars for ChatTTS")
+                logger.info(f"Truncated text to 500 chars for ChatTTS")
             
             # Generate speech
             wavs = model.infer([text])
             
             # Save as WAV file
+            temp_wav = output_path.replace('.mp3', '_temp.wav')
             import scipy.io.wavfile as wavfile
-            wavfile.write(output_path, 24000, np.array(wavs[0]))
+            wavfile.write(temp_wav, 24000, np.array(wavs[0]))
             
-            # Convert to MP3 for consistency (optional)
-            if output_path.endswith('.mp3'):
-                mp3_path = output_path
-                wav_path = output_path.replace('.mp3', '_temp.wav')
-                Path(wav_path).write_bytes(Path(output_path).read_bytes())
-                
-                # Convert WAV to MP3 using ffmpeg
-                import subprocess
-                subprocess.run([
-                    "ffmpeg", "-i", wav_path, "-c:a", "libmp3lame", 
-                    "-q:a", "4", mp3_path, "-y"
-                ], check=True, capture_output=True)
-                Path(wav_path).unlink()
+            # Convert to MP3
+            subprocess.run([
+                "ffmpeg", "-i", temp_wav, "-c:a", "libmp3lame", 
+                "-q:a", "4", output_path, "-y"
+            ], check=True, capture_output=True)
+            
+            # Clean up temp file
+            Path(temp_wav).unlink()
             
             return True
             
         except Exception as e:
-            print(f"ChatTTS error: {e}")
+            logger.error(f"ChatTTS error: {e}")
             raise
 
     def _tts_xtts(self, text, output_path):
@@ -250,40 +274,30 @@ class TTSEngine:
         try:
             from TTS.api import TTS
         except ImportError:
-            print("TTS not installed")
+            logger.error("TTS not installed")
             raise
-            
+        
         try:
-            if "xtts" not in self.initialized_models:
-                # Load lightweight XTTS model for CPU
-                self.initialized_models["xtts"] = TTS(
+            model_key = "xtts"
+            if model_key not in self.models:
+                self.models[model_key] = TTS(
                     "tts_models/multilingual/multi-dataset/xtts_v2"
                 ).to("cpu")
-                print("XTTS-v2 model loaded")
+                logger.info("XTTS-v2 model loaded")
             
-            model = self.initialized_models["xtts"]
+            model = self.models[model_key]
             
             # Limit text length
             if len(text) > 500:
                 text = text[:500]
-                print(f"Truncated text to 500 chars for XTTS")
+                logger.info(f"Truncated text to 500 chars for XTTS")
             
-            # Use default speaker or create a reference file if needed
-            speaker_wav = "scripts/ref.wav"
-            if not Path(speaker_wav).exists():
-                # Use a default voice without reference
-                model.tts_to_file(
-                    text=text, 
-                    file_path=output_path, 
-                    language="en"
-                )
-            else:
-                model.tts_to_file(
-                    text=text, 
-                    file_path=output_path, 
-                    speaker_wav=speaker_wav, 
-                    language="en"
-                )
+            # Use default voice without reference file
+            model.tts_to_file(
+                text=text, 
+                file_path=output_path, 
+                language="en"
+            )
             
             # Verify output
             if Path(output_path).exists() and Path(output_path).stat().st_size > 0:
@@ -292,42 +306,35 @@ class TTSEngine:
                 raise Exception("XTTS produced empty file")
                 
         except Exception as e:
-            print(f"XTTS error: {e}")
+            logger.error(f"XTTS error: {e}")
             raise
 
-    def _generate_silence(self, output_path, duration_seconds=1.0):
+    def _generate_silence(self, output_path, duration_seconds=1.5):
         """Zero-Fail fallback: creates a silent audio file."""
         try:
-            # Generate silent MP3 using ffmpeg (more compatible)
-            if output_path.endswith('.mp3'):
-                import subprocess
-                subprocess.run([
-                    "ffmpeg", "-f", "lavfi", "-i", 
-                    f"anullsrc=channel_layout=stereo:sample_rate=44100",
-                    "-t", str(duration_seconds), "-c:a", "libmp3lame",
-                    "-q:a", "9", output_path, "-y"
-                ], check=True, capture_output=True)
-            else:
-                # Generate WAV silence
-                with wave.open(output_path, 'wb') as wf:
-                    wf.setnchannels(1)
-                    wf.setsampwidth(2)
-                    wf.setframerate(44100)
-                    frames = int(44100 * duration_seconds)
-                    wf.writeframes(b'\x00' * frames * 2)
+            # Generate silent MP3 using ffmpeg
+            subprocess.run([
+                "ffmpeg", "-f", "lavfi", "-i", 
+                f"anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-t", str(duration_seconds), "-c:a", "libmp3lame",
+                "-q:a", "9", output_path, "-y"
+            ], check=True, capture_output=True, timeout=10)
             
-            print(f"Generated {duration_seconds}s silence file")
+            logger.info(f"Generated {duration_seconds}s silence file")
             return True
             
         except Exception as e:
-            print(f"Silence generation failed: {e}")
+            logger.error(f"Silence generation failed: {e}")
             # Ultra-fallback: create empty file
-            Path(output_path).touch()
+            try:
+                Path(output_path).touch()
+            except:
+                pass
             return False
 
     def cleanup(self):
         """Clean up loaded models to free memory."""
-        self.initialized_models.clear()
+        self.models.clear()
         import gc
         gc.collect()
         if torch.cuda.is_available():
