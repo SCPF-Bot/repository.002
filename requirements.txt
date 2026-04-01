@@ -15,9 +15,7 @@ opencv-python-headless==4.10.0.84
 # --- TTS Engines ---
 edge-tts==6.1.9
 elevenlabs==1.2.0
-
-# MeloTTS - stable commit (Oct 2024)
-git+https://github.com/myshell-ai/MeloTTS.git@bc8e8b4b5ac7f5a40dd1aab28e35d8b2c7048d48
+git+https://github.com/myshell-ai/MeloTTS.git@main
 
 # ChatTTS and XTTS-v2 dependencies
 ChatTTS==0.3.0
