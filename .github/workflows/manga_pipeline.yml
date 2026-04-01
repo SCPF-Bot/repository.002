@@ -60,19 +60,26 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
+          
+          # Install dependencies with corrected package names for Ubuntu 24.04+
           sudo apt-get install -y --no-install-recommends \
             ffmpeg \
             tesseract-ocr \
             libtesseract-dev \
             libmagic1 \
-            libgl1-mesa-glx \
+            libgl1 \
             libglib2.0-0 \
             unzip \
             curl \
-            espeak-ng
+            espeak-ng \
+            libsm6 \
+            libxext6 \
+            libxrender-dev \
+            libgomp1
           
           ffmpeg -version | head -n1
           tesseract --version
+          
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -128,9 +135,6 @@ jobs:
             exit 1
           fi
           echo "✓ Input validation passed"
-          echo "URL: ${{ github.event.inputs.url }}"
-          echo "OCR: ${{ github.event.inputs.ocr_engine }}"
-          echo "TTS: ${{ github.event.inputs.tts_engine }}"
 
       - name: Run Processing Pipeline
         timeout-minutes: 300
@@ -139,11 +143,8 @@ jobs:
           DEEPGRAM_KEY: ${{ secrets.DEEPGRAM_KEY }}
           FISH_KEY: ${{ secrets.FISH_KEY }}
           PYTHONUNBUFFERED: 1
-          DEBUG: ${{ github.event.inputs.enable_debug }}
         run: |
           mkdir -p output processing scripts engines
-          
-          # Create __init__.py if not exists
           touch engines/__init__.py
           
           python core_pipeline.py \
@@ -162,13 +163,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pipeline-logs-${{ github.run_id }}
-          path: |
-            processing/pipeline.log
-            processing/*.txt
+          path: processing/pipeline.log
           retention-days: 7
 
       - name: Create Release
-        id: create_release
         uses: softprops/action-gh-release@v2
         if: success() && hashFiles('output/*.mp4') != ''
         with:
@@ -176,43 +174,16 @@ jobs:
           tag_name: build-${{ github.run_id }}
           name: "Manga AI Export - Build ${{ github.run_number }}"
           make_latest: true
-          body: |
-            ## 🎬 Manga Video Generation Complete
-            
-            ### Processing Details:
-            - **Build Number:** ${{ github.run_number }}
-            - **URL Source:** `${{ github.event.inputs.url }}`
-            - **OCR Engine:** ${{ github.event.inputs.ocr_engine }}
-            - **TTS Engine:** ${{ github.event.inputs.tts_engine }}
-            - **Status:** ✅ Success
-            
-            ### 📊 Statistics:
-            - **Duration:** ${{ github.run_duration }}
-            - **Triggered by:** ${{ github.actor }}
-            
-            ### 🔧 Configuration:
-            - **Runner:** Ubuntu Latest
-            - **Python:** 3.10
-            - **Models Cached:** ${{ steps.cache-models.outputs.cache-hit == 'true' && 'Yes' || 'No' }}
-            
-            *Video files attached below ⬇️*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload to GitHub Artifacts (Fallback)
+      - name: Upload to GitHub Artifacts
         uses: actions/upload-artifact@v4
         if: success() && hashFiles('output/*.mp4') != ''
         with:
           name: manga-video-${{ github.run_id }}
           path: output/*.mp4
           retention-days: 90
-
-      - name: Notify on Failure
-        if: failure()
-        run: |
-          echo "❌ Pipeline failed!"
-          echo "Check the pipeline logs for details:"
-          echo "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Cleanup Workspace
         if: always()
