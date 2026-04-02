@@ -1,74 +1,75 @@
 # 🌀 Manga-to-Video
 
-***Simple, modular, and fail-safe automation pipeline for converting Manga/Manhwa into high-quality narrated videos. It utilizes a Strategy Pattern architecture, allowing you to swap between 5+ OCR engines and 10+ TTS engines via a simple interface in GitHub Actions.***
+***This repository is a high-performance orchestration layer that turns static manga pages into narrated videos. It’s built to be stateless, serverless, and resilient.***
 
 ---
 
-## 🛠 1. Capabilities & Supported Engines
-This pipeline intelligently handles the heavy lifting of image processing, text extraction, and neural speech synthesis.
-### 🔍 OCR (Optical Character Recognition)
- * Google Vision API: Best-in-class accuracy (Requires API Key).
- * Manga-OCR: Specialized Japanese manga text recognition.
- * PaddleOCR: High-speed multilingual detection.
- * Comic-Text-Detector: Optimized for finding text in speech bubbles.
- * Tesseract OCR: The ultimate local fallback.
-### 🎙️ TTS (Text-to-Speech)
- * Premium APIs: ElevenLabs, Deepgram Aura, Fish Speech (Now with auto-retry & exponential backoff).
- * Local Neural: XTTS-v2, ChatTTS, MeloTTS (Optimized for CPU usage on GitHub Runners).
- * Free/Web: Microsoft Edge-TTS (No API key required).
+## 🛑 0. Prerequisites
+Before you even think about clicking "Run," you need:
+ * A GitHub Account: Obviously.
+ * API Keys: While edge_tts and tesseract are free, they are "budget" options. For quality, get keys for:
+   * ElevenLabs (Premium Voice)
+   * Deepgram (Fastest Voice)
+   * Google Cloud Vision (Best OCR)
+ * A Direct Download URL: The pipeline needs a link to a .zip or .cbz file. It won't scrape a website; it expects a raw archive.
 
-## 🚀 2. Quick Start: GitHub Automation
- * Fork this repository to your own GitHub account.
- * Enable Actions: Navigate to the "Actions" tab and click "I understand my workflows, let them run."
- * Set Permissions: Go to Settings > Actions > General. Scroll to "Workflow permissions" and select Read and write permissions.
- * Set Secrets: Go to Settings > Secrets and variables > Actions. Add your API keys (e.g., ELEVENLABS_API_KEY, DEEPGRAM_KEY) as secrets.
- * Run: Click "Run workflow" in the Actions tab, provide your Manga URL, and select your preferred engines.
+## 🛠 1. The Setup
+### Step 1: Forking & Initialization
+ * Fork this repository to your account.
+ * Navigate to the Actions tab.
+ * Click the big green button: "I understand my workflows, let them run."
+### Step 2: Permissions
+By default, GitHub Actions are "Read Only." This pipeline needs to upload video files to your "Releases."
+ * Go to Settings > Actions > General.
+ * Scroll to Workflow permissions.
+ * Select Read and write permissions.
+ * Click Save.
+### Step 3: Hardening with Secrets
+The code is built to handle API failures, but it can't invent keys you didn't provide.
+ * Go to Settings > Secrets and variables > Actions.
+ * Create New repository secret for any of the following you plan to use:
+   * ELEVENLABS_API_KEY
+   * DEEPGRAM_KEY
+   * FISH_KEY
+   * GOOGLE_CREDENTIALS (Paste the entire JSON service account key here).
 
-## 🧠 3. High-Performance Architecture
-The pipeline has been refactored for maximum reliability and speed:
- * Lightning-Fast Rendering: We no longer encode video page-by-page. The pipeline now uses a PIL-based Standardizer combined with an FFmpeg Concat Demuxer. This bypasses heavy video re-encoding, reducing CPU usage by 80% and finishing video compilation in seconds.
- * Network Resilience: Integrated Exponential Backoff for all API-based engines. If you hit a 429: Too Many Requests error, the pipeline will automatically wait and retry with increasing delays instead of crashing.
- * Archive Collision Safety: Enhanced .zip and .cbz extraction logic. Files are automatically indexed and prefixed during extraction to prevent images in nested subfolders from overwriting each other.
- * Atomic Sync: The pipeline uses ffprobe to measure the exact duration of every generated audio clip. We do not "guess" timings; the visual frame stays perfectly synced with the voiceover.
- * Silent Fallback: For art-only pages or OCR misses, the pipeline generates a 1.5s silent audio track to maintain the video's rhythmic flow.
+## 🚀 2. Running the Pipeline
+ * Go to the Actions tab.
+ * Select the Manga-To-Video (High Performance) workflow on the left.
+ * Click the Run workflow dropdown.
+ * Inputs:
+   * URL: Provide the direct link to your .zip or .cbz.
+   * OCR Engine: Select google_vision for accuracy or tesseract for free.
+   * TTS Engine: Select elevenlabs for quality or edge_tts for free.
+ * Click Run workflow.
 
-## 📈 4. Local Development
-To run this on your local machine:
- * Install Binaries:
+## 🏗 3. How/Why This Works
+The architecture follows a strict Strategy Pattern to ensure the pipeline doesn't crash just because one API is having a bad day.
+The "Zero-Fail" Logic:
+ * Standardization: Every image is resized to 1920x1080 and padded with black bars before FFmpeg touches it. This prevents "Aspect Ratio Mismatch" errors that plague amateur scripts.
+ * Concat Demuxing: We don't render 50 individual mini-videos. We generate 50 audio files, one image list, and tell FFmpeg to "stream-copy" them together. This is 10x faster than traditional rendering.
+ * Exponential Backoff: If the TTS API returns a 429 Too Many Requests, the script doesn't quit. It waits 2^n seconds and tries again.
+ * Memory Management: We run gc.collect() and clear CUDA caches after every page. GitHub's 7GB RAM limit is tight; we respect it.
 
-   Ubuntu/Debian
+## 📉 4. Troubleshooting
 
-   ```
-   sudo apt install ffmpeg tesseract-ocr libgl1-mesa-glx libglib2.0-0
-   ```
+| Issue | Likely Cause | Solution |
+|---|---|---|
+| Workflow fails immediately | Permissions | See Step 2 above. You forgot to enable "Write" permissions. |
+| No Text Found | Poor Image Quality | Tesseract is "okay," but it struggles with vertical text or stylized fonts. Use manga_ocr or google_vision. |
+| Audio is cut off | FFmpeg Quirk | The new pipeline uses ffprobe to get exact durations. If it's still cutting off, check if your archive has corrupted images. |
+| Pipeline is slow | Local Engines | xtts_v2 and manga_ocr are massive models. On GitHub's CPU-only runners, they take time. Use API-based engines for speed. |
 
- * Install Python Libs:
+## 💻 5. Local Development
+If you want to run this on your own 4090-equipped rig:
+ * Clone: git clone https://github.com/your-username/manga-to-video
+ * System Deps: Run ./scripts/system_deps.sh.
+ * Install: pip install -r requirements.txt.
+ * Run:
+   python scripts/core_pipeline.py --url "http://example.com/manga.zip" --ocr "manga_ocr" --tts "edge_tts"
 
-   ```
-   pip install -r requirements.txt
-   ```
+---
 
- * Execute:
+# Disclaimer
 
-   ```
-   python scripts/core_pipeline.py --url "YOUR_URL" --ocr "tesseract" --tts "edge_tts"
-   ```
-
-## 📁 5. Repository Structure
-
-```
-.
-├── .github/workflows/    # GitHub Actions workflow (Automation Skeleton)
-├── engines/
-│   ├── ocr_engines.py    # OCR Strategy implementations & Failover
-│   └── tts_engines.py    # TTS Strategy implementations & API Retries
-├── scripts/
-│   ├── core_pipeline.py  # Main Orchestrator & FFmpeg Multiplexer
-│   └── system_deps.sh    # System-level dependency installer
-└── requirements.txt      # Python dependency manifest
-```
-
-## 🕊 Credits
- * Fish Audio, ElevenLabs, & Deepgram: For state-of-the-art TTS APIs.
- * PaddlePaddle: For the robust OCR framework.
- * FFmpeg: The backbone of the media multiplexing logic.
+***This tool is for automation. Please respect copyright laws and the Terms of Service of the API providers you use. If you hit a rate limit, don't blame the code please...***
