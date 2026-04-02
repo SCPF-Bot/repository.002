@@ -1,4 +1,4 @@
-name: Manga-To-Video (High Performance)
+name: Manga To Video
 
 on:
   workflow_dispatch:
