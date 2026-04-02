@@ -14,7 +14,7 @@ opencv-python-headless==4.11.0.86
 # --- TTS Engines ---
 edge-tts==7.2.8
 elevenlabs==2.40.0
-TTS==0.27.5
+TTS==0.22.0
 # MeloTTS via git
 git+https://github.com/myshell-ai/MeloTTS.git@main
 
