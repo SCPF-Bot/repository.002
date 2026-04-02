@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
 """
-Manga AI Video Pipeline - Zero Fail Promise
-Orchestrates the complete workflow from manga download to video rendering.
+Manga to Video AI Pipeline
+Orchestrates OCR, TTS, and video rendering for manga chapters.
 """
 
 import os
-import argparse
-import asyncio
-import subprocess
-import shutil
 import sys
+import argparse
 import logging
+import zipfile
+import shutil
+import tempfile
+import subprocess
 from pathlib import Path
+from typing import List, Dict, Tuple
+import json
+import time
+
+# Add engines directory to path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from engines.ocr_engines import OCREngine
+from engines.tts_engines import TTSEngine
 
 # Configure logging
 logging.basicConfig(
@@ -20,355 +30,320 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Add parent directory to path to import engines
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Fallback for natsort
-try:
-    from natsort import natsorted
-except ImportError:
-    logger.warning("natsort not installed, using basic sort")
-    natsorted = sorted
-
-# Import engines
-try:
-    from engines.ocr_engines import OCREngine
-    from engines.tts_engines import TTSEngine
-except ImportError as e:
-    logger.error(f"Failed to import engines: {e}")
-    logger.error("Make sure engines/ directory exists with __init__.py, ocr_engines.py, and tts_engines.py")
-    sys.exit(1)
-
-# Global Configuration
-BASE_DIR = Path("processing")
-OUT_DIR = Path("output")
-TEMP_IMG = BASE_DIR / "images"
-TEMP_AUD = BASE_DIR / "audio"
-
-
-class MangaVideoOrchestrator:
-    """Main orchestrator for manga to video conversion."""
+class MangaToVideoPipeline:
+    """Main pipeline orchestrator for manga to video conversion."""
     
-    def __init__(self, ocr_type, tts_type):
-        logger.info(f"Initializing Orchestrator with OCR={ocr_type}, TTS={tts_type}")
-        self.ocr = OCREngine(ocr_type)
-        self.tts = TTSEngine(tts_type)
-        self._prepare_env()
-
-    def _prepare_env(self):
-        """Clean and recreate the workspace for a fresh build."""
-        try:
-            for d in [OUT_DIR, TEMP_IMG, TEMP_AUD, BASE_DIR]:
-                if d.exists():
-                    shutil.rmtree(d)
-                d.mkdir(parents=True, exist_ok=True)
-            logger.info("Environment prepared successfully")
-        except Exception as e:
-            logger.error(f"Failed to prepare environment: {e}")
-            raise
-
-    async def download_and_extract(self, url):
-        """Secure ingestion of manga assets."""
-        logger.info("--- Phase 1: Ingestion ---")
-        archive_path = BASE_DIR / "manga_archive.zip"
+    def __init__(self, ocr_engine="tesseract", tts_engine="edge_tts", debug=False):
+        self.ocr_engine = OCREngine(ocr_engine)
+        self.tts_engine = TTSEngine(tts_engine)
+        self.debug = debug
         
+        # Setup directories
+        self.base_dir = Path("processing")
+        self.images_dir = self.base_dir / "images"
+        self.audio_dir = self.base_dir / "audio"
+        self.output_dir = Path("output")
+        
+        # Create directories
+        for d in [self.base_dir, self.images_dir, self.audio_dir, self.output_dir]:
+            d.mkdir(parents=True, exist_ok=True)
+            
+        logger.info(f"Pipeline initialized: OCR={ocr_engine}, TTS={tts_engine}")
+    
+    def download_and_extract(self, url: str) -> List[Path]:
+        """Download and extract manga archive."""
+        logger.info(f"Processing URL: {url}")
+        
+        # Handle different URL types
+        if url.startswith(('http://', 'https://')):
+            # Download file
+            import requests
+            response = requests.get(url, stream=True, timeout=60)
+            response.raise_for_status()
+            
+            temp_zip = self.base_dir / "temp_manga.zip"
+            with open(temp_zip, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            archive_path = temp_zip
+        else:
+            # Local file
+            archive_path = Path(url)
+        
+        # Extract images
+        if archive_path.suffix.lower() in ['.cbz', '.zip']:
+            with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+                zip_ref.extractall(self.images_dir)
+        else:
+            # Assume it's a directory or single image
+            if archive_path.is_file():
+                shutil.copy(archive_path, self.images_dir)
+            elif archive_path.is_dir():
+                shutil.copytree(archive_path, self.images_dir, dirs_exist_ok=True)
+        
+        # Get sorted image files
+        image_files = self._get_sorted_images()
+        logger.info(f"Extracted {len(image_files)} images")
+        
+        # Cleanup temp file
+        if 'temp_zip' in locals():
+            temp_zip.unlink()
+        
+        return image_files
+    
+    def _get_sorted_images(self) -> List[Path]:
+        """Get sorted list of image files."""
+        from natsort import natsorted
+        
+        extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+        images = []
+        
+        for ext in extensions:
+            images.extend(self.images_dir.glob(f"*{ext}"))
+            images.extend(self.images_dir.glob(f"*{ext.upper()}"))
+        
+        return natsorted(images)
+    
+    def extract_text(self, image_path: Path) -> str:
+        """Extract text from image using OCR."""
+        logger.info(f"Extracting text from: {image_path.name}")
+        return self.ocr_engine.get_text(str(image_path))
+    
+    def generate_audio(self, text: str, output_path: Path) -> bool:
+        """Generate audio from text using TTS."""
+        if not text or len(text.strip()) < 2:
+            logger.warning(f"Empty text for {output_path.name}, generating silence")
+            return self.tts_engine._generate_silence(str(output_path))
+        
+        logger.info(f"Generating audio for: {output_path.name} ({len(text)} chars)")
+        
+        # Use asyncio to run async TTS
+        import asyncio
         try:
-            # Download with curl (more reliable than wget in CI environments)
-            logger.info(f"Downloading from: {url}")
-            result = subprocess.run(
-                ["curl", "-L", "--max-time", "300", "--fail", url, "-o", str(archive_path)], 
-                check=True, 
-                timeout=300,
-                capture_output=True
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(
+                self.tts_engine.generate(text, str(output_path))
             )
-            logger.info(f"Download complete: {archive_path.stat().st_size} bytes")
-            
-            # Determine archive type and extract accordingly
-            if archive_path.suffix.lower() == '.zip':
-                subprocess.run(
-                    ["unzip", "-o", "-q", str(archive_path), "-d", str(TEMP_IMG)], 
-                    check=True, 
-                    timeout=120,
-                    capture_output=True
-                )
-            else:
-                # Handle CBZ (which is just zip with different extension)
-                subprocess.run(
-                    ["unzip", "-o", "-q", str(archive_path), "-d", str(TEMP_IMG)], 
-                    check=True, 
-                    timeout=120,
-                    capture_output=True
-                )
-            
-            logger.info(f"Successfully extracted assets to {TEMP_IMG}")
-            
-            # Remove zip file to save space
-            archive_path.unlink()
-            
-            # Handle nested directories - move files up if needed
-            self._flatten_extracted_files()
-            
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Download/Unzip failed: {e}")
-            if e.stderr:
-                logger.error(f"Error output: {e.stderr.decode()}")
-            raise
-        except subprocess.TimeoutExpired as e:
-            logger.error(f"Operation timed out: {e}")
-            raise
+            loop.close()
+            return result
         except Exception as e:
-            logger.error(f"Unexpected error during ingestion: {e}")
-            raise
-
-    def _flatten_extracted_files(self):
-        """Move images from nested directories to the root images directory."""
-        try:
-            # Find all image files in subdirectories
-            valid_exts = ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif')
-            for root, dirs, files in os.walk(TEMP_IMG):
-                for file in files:
-                    if file.lower().endswith(valid_exts):
-                        src = Path(root) / file
-                        dst = TEMP_IMG / file
-                        if src != dst:
-                            shutil.move(str(src), str(dst))
-            
-            # Remove empty directories
-            for root, dirs, files in os.walk(TEMP_IMG, topdown=False):
-                for dir_name in dirs:
-                    try:
-                        dir_path = Path(root) / dir_name
-                        if dir_path.exists() and not any(dir_path.iterdir()):
-                            dir_path.rmdir()
-                    except Exception:
-                        pass
-                        
-            logger.info("Extracted files flattened")
-            
-        except Exception as e:
-            logger.warning(f"Error flattening files: {e}")
-
-    async def run(self, url):
-        """Main execution pipeline."""
-        try:
-            # Phase 1: Download and extract
-            await self.download_and_extract(url)
-
-            # Phase 2: Process pages
-            await self._process_pages()
-
-            # Phase 3: Render video
-            await self._render_video()
-            
-            logger.info(f"Pipeline complete! Output in: {OUT_DIR}")
-            
-        except Exception as e:
-            logger.error(f"Pipeline failed: {e}")
-            raise
-        finally:
-            self.cleanup()
-
-    async def _process_pages(self):
-        """Process all pages with OCR and TTS."""
-        logger.info("--- Phase 2: Processing Pages ---")
+            logger.error(f"Audio generation failed: {e}")
+            return False
+    
+    def process_pages(self, image_files: List[Path]) -> List[Dict]:
+        """Process all pages through OCR and TTS."""
+        results = []
         
-        # Gather images and sort them naturally
-        valid_exts = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
-        images = natsorted([
-            f for f in TEMP_IMG.rglob("*") 
-            if f.suffix.lower() in valid_exts and not f.name.startswith('.')
-        ])
-
-        if not images:
-            raise Exception("No valid images found in the archive")
-
-        logger.info(f"Found {len(images)} images to process")
+        for idx, img_path in enumerate(image_files):
+            logger.info(f"Processing page {idx + 1}/{len(image_files)}")
+            
+            # Extract text
+            text = self.extract_text(img_path)
+            
+            if self.debug:
+                logger.debug(f"Page {idx + 1} text: {text[:200]}...")
+            
+            # Generate audio
+            audio_path = self.audio_dir / f"page_{idx + 1:04d}.mp3"
+            success = self.generate_audio(text, audio_path)
+            
+            results.append({
+                'page': idx + 1,
+                'image': str(img_path),
+                'audio': str(audio_path) if success else None,
+                'text': text,
+                'has_audio': success
+            })
+            
+            # Save text for debugging
+            if self.debug:
+                text_path = self.base_dir / f"page_{idx + 1:04d}.txt"
+                text_path.write_text(text, encoding='utf-8')
         
-        self.manifest_data = []
-        self.audio_list_data = []
-        self.page_durations = []
-
-        for i, img_path in enumerate(images):
-            logger.info(f"Processing Page {i+1}/{len(images)}: {img_path.name}")
-            
-            # 1. OCR Extraction
-            try:
-                text = self.ocr.get_text(str(img_path))
-                if not text or not text.strip():
-                    text = "No text detected on this page."
-                    logger.warning(f"No text detected on page {i+1}")
-                else:
-                    logger.info(f"Extracted text: {text[:100]}...")
-            except Exception as e:
-                logger.error(f"OCR Error on page {i+1}: {e}")
-                text = "Error processing text on this page."
-            
-            # 2. TTS Generation
-            audio_file = TEMP_AUD / f"page_{i:04d}.mp3"
-            try:
-                await self.tts.generate(text, str(audio_file))
-                if not audio_file.exists() or audio_file.stat().st_size == 0:
-                    raise Exception(f"Audio file not created or empty: {audio_file}")
-                logger.info(f"Generated audio: {audio_file.name} ({audio_file.stat().st_size} bytes)")
-            except Exception as e:
-                logger.error(f"TTS Error on page {i+1}: {e}")
-                self._generate_silence_fallback(audio_file)
-                logger.info(f"Created silent fallback audio")
-
-            # 3. Get Duration
-            duration = self._get_audio_duration(audio_file)
-            self.page_durations.append(duration)
-
-            # 4. Prepare FFmpeg Concatenation Strings
-            safe_img_path = str(img_path.resolve()).replace("'", "'\\''")
-            safe_aud_path = str(audio_file.resolve()).replace("'", "'\\''")
-            
-            self.manifest_data.append(f"file '{safe_img_path}'\nduration {duration}")
-            self.audio_list_data.append(f"file '{safe_aud_path}'")
-
-    def _get_audio_duration(self, audio_file):
-        """Get audio duration using ffprobe."""
-        try:
-            result = subprocess.run([
-                "ffprobe", "-v", "error", "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1", str(audio_file)
-            ], capture_output=True, timeout=10, text=True)
-            
-            if result.returncode == 0 and result.stdout.strip():
-                duration = float(result.stdout.strip())
-                # Cap duration to reasonable limits
-                return min(max(duration, 1.0), 30.0)
-            else:
-                return 2.0
+        return results
+    
+    def render_video(self, results: List[Dict]) -> Path:
+        """Render final video with images and audio."""
+        logger.info("Rendering final video...")
+        
+        # Create a concat file for ffmpeg
+        concat_file = self.base_dir / "concat.txt"
+        audio_sources = []
+        
+        with open(concat_file, 'w') as f:
+            for result in results:
+                img_path = result['image']
+                audio_path = result.get('audio')
                 
-        except Exception as e:
-            logger.warning(f"Failed to get duration for {audio_file}: {e}")
-            return 2.0
-
-    def _generate_silence_fallback(self, output_path, duration_seconds=2.0):
-        """Generate silent audio file as fallback."""
-        try:
-            subprocess.run([
-                "ffmpeg", "-f", "lavfi", "-i", 
-                f"anullsrc=channel_layout=stereo:sample_rate=44100",
-                "-t", str(duration_seconds), "-c:a", "libmp3lame",
-                "-q:a", "9", str(output_path), "-y"
-            ], check=True, capture_output=True, timeout=30)
-        except Exception as e:
-            logger.error(f"Failed to generate silence: {e}")
-            # Ultra-fallback: create empty file
-            try:
-                output_path.touch()
-            except:
-                pass
-
-    async def _render_video(self):
-        """Render final video from processed pages."""
-        logger.info("--- Phase 3: Final Encoding ---")
+                if audio_path and Path(audio_path).exists():
+                    # Calculate duration based on audio length
+                    duration = self._get_audio_duration(audio_path)
+                    audio_sources.append(audio_path)
+                else:
+                    # Default duration for silent pages
+                    duration = 3.0
+                
+                f.write(f"file '{img_path}'\n")
+                f.write(f"duration {duration}\n")
         
-        if not self.manifest_data or not self.audio_list_data:
-            raise Exception("No pages processed for rendering")
+        # Generate video with audio
+        output_video = self.output_dir / "manga_video.mp4"
         
-        # Write temporary manifests
-        img_manifest = BASE_DIR / "img_list.txt"
-        aud_manifest = BASE_DIR / "aud_list.txt"
+        if audio_sources:
+            # Mix all audio tracks
+            mixed_audio = self._mix_audio_files(audio_sources)
+            audio_input = ["-i", str(mixed_audio)]
+        else:
+            audio_input = []
         
-        # FFmpeg concat demuxer requires the last file to be repeated without duration
-        last_img = self.manifest_data[-1].split('\n')[0]
-        img_manifest.write_text("\n".join(self.manifest_data) + f"\n{last_img}")
-        aud_manifest.write_text("\n".join(self.audio_list_data))
-
-        master_audio = BASE_DIR / "master_audio.mp3"
-        final_video = OUT_DIR / "manga_ai_render.mp4"
-
-        # 1. Combine all audio segments
-        try:
-            subprocess.run([
-                "ffmpeg", "-f", "concat", "-safe", "0", "-i", str(aud_manifest),
-                "-c", "copy", str(master_audio), "-y"
-            ], check=True, capture_output=True, timeout=300)
-            logger.info(f"Combined {len(self.audio_list_data)} audio tracks")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Audio concatenation failed: {e.stderr.decode() if e.stderr else str(e)}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error during audio concatenation: {e}")
-            raise
-
-        # 2. Stitch images with audio
+        # Build ffmpeg command
         cmd = [
-            "ffmpeg", "-f", "concat", "-safe", "0", "-i", str(img_manifest),
-            "-i", str(master_audio),
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium", "-crf", "23",
-            "-c:a", "aac", "-b:a", "192k", "-shortest", str(final_video), "-y"
+            "ffmpeg",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(concat_file),
+            *audio_input,
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-y",
+            str(output_video)
         ]
         
         try:
-            subprocess.run(cmd, check=True, capture_output=True, timeout=600)
-            if final_video.exists():
-                file_size = final_video.stat().st_size / (1024 * 1024)
-                logger.info(f"BUILD SUCCESSFUL: {final_video} ({file_size:.2f} MB)")
-            else:
-                raise Exception("Output video file not created")
-                
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Video render failed: {e.stderr.decode() if e.stderr else str(e)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                logger.error(f"FFmpeg error: {result.stderr}")
+                raise Exception("Video rendering failed")
+            
+            logger.info(f"Video rendered: {output_video}")
+            return output_video
+            
+        except subprocess.TimeoutExpired:
+            logger.error("FFmpeg timed out")
             raise
         except Exception as e:
-            logger.error(f"Unexpected error during video render: {e}")
+            logger.error(f"FFmpeg failed: {e}")
             raise
-
-    def cleanup(self):
-        """Clean up large intermediate files to save space."""
+    
+    def _get_audio_duration(self, audio_path: str) -> float:
+        """Get audio file duration in seconds."""
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            audio_path
+        ]
+        
         try:
-            for d in [TEMP_IMG, TEMP_AUD]:
-                if d.exists():
-                    shutil.rmtree(d)
-            # Also clean up manifest files
-            for f in BASE_DIR.glob("*.txt"):
-                f.unlink()
-            logger.info("Cleanup complete")
-        except Exception as e:
-            logger.warning(f"Cleanup error: {e}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0 and result.stdout:
+                return float(result.stdout.strip())
+        except:
+            pass
         
-        # Clean up engine resources
-        if hasattr(self, 'ocr'):
-            self.ocr.cleanup()
-        if hasattr(self, 'tts'):
-            self.tts.cleanup()
+        return 3.0  # Default duration
+    
+    def _mix_audio_files(self, audio_files: List[str]) -> Path:
+        """Mix multiple audio files into a single track."""
+        mixed_audio = self.base_dir / "mixed_audio.mp3"
+        
+        # Create concat for audio
+        audio_concat = self.base_dir / "audio_concat.txt"
+        with open(audio_concat, 'w') as f:
+            for audio in audio_files:
+                f.write(f"file '{audio}'\n")
+        
+        cmd = [
+            "ffmpeg",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(audio_concat),
+            "-c:a", "libmp3lame",
+            "-b:a", "128k",
+            "-y",
+            str(mixed_audio)
+        ]
+        
+        subprocess.run(cmd, capture_output=True, check=True)
+        return mixed_audio
+    
+    def cleanup(self):
+        """Clean up temporary files."""
+        if not self.debug:
+            logger.info("Cleaning up temporary files...")
+            shutil.rmtree(self.base_dir, ignore_errors=True)
+        else:
+            logger.info(f"Debug mode: keeping files in {self.base_dir}")
+        
+        # Cleanup loaded models
+        self.ocr_engine.cleanup()
+        self.tts_engine.cleanup()
 
 
-async def main():
-    """Main entry point."""
-    parser = argparse.ArgumentParser(description="Zero-Fail Manga Pipeline")
-    parser.add_argument("--url", required=True, help="URL to CBZ/Zip file")
-    parser.add_argument("--ocr", default="tesseract", help="OCR Engine choice")
-    parser.add_argument("--tts", default="edge_tts", help="TTS Engine choice")
+def main():
+    parser = argparse.ArgumentParser(description="Manga to Video AI Pipeline")
+    parser.add_argument("--url", required=True, help="Manga download URL or local path")
+    parser.add_argument("--ocr", default="tesseract", 
+                       choices=["google_vision", "manga_ocr", "paddle_ocr", 
+                               "comic_text_detector", "tesseract"],
+                       help="Primary OCR engine")
+    parser.add_argument("--tts", default="edge_tts",
+                       choices=["elevenlabs", "fish_speech", "xtts_v2", 
+                               "chat_tts", "melo_tts", "deepgram_aura", "edge_tts"],
+                       help="Primary TTS engine")
+    parser.add_argument("--enable-debug", action="store_true", help="Enable debug logging")
+    
     args = parser.parse_args()
-
-    # Validate inputs
-    if not args.url:
-        logger.error("URL is required")
-        sys.exit(1)
-
-    orchestrator = None
+    
+    # Set logging level
+    if args.enable_debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+    
+    pipeline = None
     try:
-        orchestrator = MangaVideoOrchestrator(args.ocr, args.tts)
-        await orchestrator.run(args.url)
-        logger.info("Pipeline completed successfully!")
+        pipeline = MangaToVideoPipeline(
+            ocr_engine=args.ocr,
+            tts_engine=args.tts,
+            debug=args.enable_debug
+        )
         
-    except KeyboardInterrupt:
-        logger.info("Pipeline interrupted by user")
-        sys.exit(1)
+        # Download and extract
+        image_files = pipeline.download_and_extract(args.url)
+        
+        if not image_files:
+            logger.error("No images found in the archive")
+            sys.exit(1)
+        
+        # Process pages
+        results = pipeline.process_pages(image_files)
+        
+        # Count successful pages
+        successful = sum(1 for r in results if r['has_audio'])
+        logger.info(f"Processed {len(results)} pages, {successful} with audio")
+        
+        # Render video
+        video_path = pipeline.render_video(results)
+        
+        logger.info(f"✓ Pipeline completed successfully!")
+        logger.info(f"Output video: {video_path}")
+        logger.info(f"File size: {video_path.stat().st_size / (1024*1024):.1f} MB")
         
     except Exception as e:
-        logger.error(f"Pipeline failed: {e}")
+        logger.error(f"Pipeline failed: {e}", exc_info=True)
         sys.exit(1)
-        
     finally:
-        if orchestrator:
-            orchestrator.cleanup()
+        if pipeline:
+            pipeline.cleanup()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
