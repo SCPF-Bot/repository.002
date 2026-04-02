@@ -72,4 +72,4 @@ If you want to run this on your own 4090-equipped rig:
 
 # Disclaimer
 
-***This tool is for automation. Please respect copyright laws and the Terms of Service of the API providers you use. If you hit a rate limit, don't blame the code please...***
+***This tool is for automation. Please respect copyright laws and the Terms of Service of the API providers you use. Avoid using this for malicious acts such as pirating or any copyright infringement violations. If you hit a rate limit, don't blame the code please...***
