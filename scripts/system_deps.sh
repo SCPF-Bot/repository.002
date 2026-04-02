@@ -1,28 +1,21 @@
 #!/bin/bash
 set -e
 
-echo "=== Installing System Dependencies ==="
-
+echo "=== Installing Optimized System Dependencies ==="
 sudo apt-get update
 
 sudo apt-get install -y --no-install-recommends \
     ffmpeg \
+    ffprobe \
     tesseract-ocr \
     libtesseract-dev \
-    libmagic1 \
-    libgl1 \
+    libgl1-mesa-glx \
     libglib2.0-0 \
+    libgomp1 \
     unzip \
     curl \
-    espeak-ng \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgomp1 \
-    espeak-ng \
-    libespeak-ng-dev
-    
+    espeak-ng
+
 sudo apt-get clean
 sudo rm -rf /var/lib/apt/lists/*
-
-echo "✓ System dependencies installed"
+echo "✓ System dependencies ready"
