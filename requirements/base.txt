@@ -6,3 +6,5 @@ torch --extra-index-url https://download.pytorch.org/whl/cpu
 numpy
 aiofiles
 aiohttp
+pytesseract
+edge-tts
