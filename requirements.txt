@@ -9,7 +9,7 @@ pytesseract==0.3.13
 manga-ocr==0.1.14
 paddleocr==3.4.0
 paddlepaddle==3.3.1
-opencv-python-headless==4.13.0.92
+opencv-python-headless==4.10.0.84
 
 # --- TTS Engines ---
 edge-tts==7.2.8
@@ -19,6 +19,6 @@ TTS==0.22.0
 git+https://github.com/myshell-ai/MeloTTS.git@main
 
 # --- Utilities ---
-numpy==1.26.4  # Pinned to 1.x for compatibility with Paddle/Coqui TTS
+numpy==1.26.4  
 scipy==1.15.3
-torch==2.11.0 --extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0 --extra-index-url https://download.pytorch.org/whl/cpu
