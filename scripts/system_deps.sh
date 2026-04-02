@@ -1,21 +1,26 @@
 #!/bin/bash
 set -e
 
-echo "=== Installing Optimized System Dependencies ==="
+echo "=== Installing Modernized System Dependencies ==="
+
+# Update package lists
 sudo apt-get update
 
+# Install dependencies
+# Note: libgl1 replaces the obsolete libgl1-mesa-glx
 sudo apt-get install -y --no-install-recommends \
     ffmpeg \
-    ffprobe \
     tesseract-ocr \
     libtesseract-dev \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
-    libgomp1 \
     unzip \
     curl \
-    espeak-ng
+    espeak-ng \
+    libgomp1
 
+# Cleanup to keep the runner image lean
 sudo apt-get clean
 sudo rm -rf /var/lib/apt/lists/*
-echo "✓ System dependencies ready"
+
+echo "✓ System dependencies installed successfully"
