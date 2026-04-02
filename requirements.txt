@@ -1,24 +1,24 @@
 # --- Core Orchestration ---
 natsort==8.4.0
-pillow==11.3.0
-requests==2.32.4
+pillow==12.2.0
+requests==2.33.1
 google-cloud-vision==3.13.0
 
 # --- OCR Engines ---
 pytesseract==0.3.13
 manga-ocr==0.1.14
-paddleocr==3.0.2
+paddleocr==3.4.0
 paddlepaddle==3.3.1
-opencv-python-headless==4.11.0.86
+opencv-python-headless==4.13.0.92
 
 # --- TTS Engines ---
 edge-tts==7.2.8
-elevenlabs==2.40.0
+elevenlabs==2.41.0
 TTS==0.22.0
 # MeloTTS via git
 git+https://github.com/myshell-ai/MeloTTS.git@main
 
 # --- Utilities ---
-numpy==1.26.4  # Pinned to 1.x for compatibility with Paddle/Coqui TTS
-scipy==1.15.3
-torch==2.6.0 --extra-index-url https://download.pytorch.org/whl/cpu
+numpy==2.4.4  # Pinned to 1.x for compatibility with Paddle/Coqui TTS
+scipy==1.71.1
+torch==2.11.0 --extra-index-url https://download.pytorch.org/whl/cpu
