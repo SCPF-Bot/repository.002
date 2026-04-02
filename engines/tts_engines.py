@@ -7,9 +7,10 @@ import numpy as np
 import subprocess
 from pathlib import Path
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
-
 
 class TTSEngine:
     """TTS Engine with comprehensive failover and fallback mechanisms."""
@@ -19,54 +20,61 @@ class TTSEngine:
         self.models = {}
         logger.info(f"Initialized TTS Engine: {self.engine_type}")
 
-    async def generate(self, text, output_path):
-        """Orchestrator for TTS generation with silent fallback logic."""
-        # Validate input
-        if not text or len(text.strip()) < 2:
-            logger.info(f"Text too short or empty, generating silence")
-            return self._generate_silence(output_path)
-
-        # Clean text for better TTS
-        text = self._clean_text(text)
-        
-        # Limit text length to prevent API issues
-        if len(text) > 5000:
-            text = text[:5000]
-            logger.info(f"Truncated text to 5000 chars")
-
-        # Try the selected engine with fallbacks
-        engines_to_try = [self.engine_type, "edge_tts"]  # Always fallback to edge_tts
-        
-        for engine in engines_to_try:
-            try:
-                if engine == "elevenlabs":
-                    success = self._tts_elevenlabs(text, output_path)
-                elif engine == "deepgram_aura":
-                    success = self._tts_deepgram(text, output_path)
-                elif engine == "fish_speech":
-                    success = self._tts_fish_api(text, output_path)
-                elif engine == "melo_tts":
-                    success = self._tts_melo(text, output_path)
-                elif engine == "chat_tts":
-                    success = self._tts_chat(text, output_path)
-                elif engine == "xtts_v2":
-                    success = self._tts_xtts(text, output_path)
-                else:
-                    success = await self._tts_edge(text, output_path)
-                
-                if success and Path(output_path).exists() and Path(output_path).stat().st_size > 0:
-                    logger.info(f"TTS successful using {engine}, size: {Path(output_path).stat().st_size} bytes")
-                    return True
-                else:
-                    logger.warning(f"TTS engine {engine} produced empty or failed output")
-                    
-            except Exception as e:
-                logger.error(f"TTS engine {engine} failed: {e}")
-                continue
-        
-        # Ultimate fallback - generate silence
-        logger.error(f"All TTS engines failed for text: {text[:50]}...")
+async def generate(self, text, output_path):
+    """Orchestrator for TTS generation with silent fallback logic."""
+    # Validate input
+    if not text or len(text.strip()) < 2:
+        logger.info(f"Text too short or empty, generating silence")
         return self._generate_silence(output_path)
+
+    # Clean text for better TTS
+    text = self._clean_text(text)
+    
+    # Limit text length to prevent API issues
+    if len(text) > 5000:
+        text = text[:5000]
+        logger.info(f"Truncated text to 5000 chars")
+
+    # Try the selected engine with fallbacks
+    engines_to_try = [self.engine_type, "edge_tts"]
+    
+    # Use ThreadPoolExecutor for sync methods
+    loop = asyncio.get_event_loop()
+    executor = ThreadPoolExecutor(max_workers=1)
+    
+    for engine in engines_to_try:
+        try:
+            if engine == "elevenlabs":
+                success = await loop.run_in_executor(executor, self._tts_elevenlabs, text, output_path)
+            elif engine == "deepgram_aura":
+                success = await loop.run_in_executor(executor, self._tts_deepgram, text, output_path)
+            elif engine == "fish_speech":
+                success = await loop.run_in_executor(executor, self._tts_fish_api, text, output_path)
+            elif engine == "melo_tts":
+                success = await loop.run_in_executor(executor, self._tts_melo, text, output_path)
+            elif engine == "chat_tts":
+                success = await loop.run_in_executor(executor, self._tts_chat, text, output_path)
+            elif engine == "xtts_v2":
+                success = await loop.run_in_executor(executor, self._tts_xtts, text, output_path)
+            else:
+                success = await self._tts_edge(text, output_path)
+            
+            if success and Path(output_path).exists() and Path(output_path).stat().st_size > 0:
+                logger.info(f"TTS successful using {engine}, size: {Path(output_path).stat().st_size} bytes")
+                executor.shutdown(wait=False)
+                return True
+            else:
+                logger.warning(f"TTS engine {engine} produced empty or failed output")
+                
+        except Exception as e:
+            logger.error(f"TTS engine {engine} failed: {e}")
+            continue
+    
+    executor.shutdown(wait=False)
+    
+    # Ultimate fallback - generate silence
+    logger.error(f"All TTS engines failed for text: {text[:50]}...")
+    return self._generate_silence(output_path)
 
     def _clean_text(self, text):
         """Clean text for better TTS pronunciation."""
