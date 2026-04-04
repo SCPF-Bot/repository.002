@@ -26,7 +26,6 @@ class MangaToVideoPipeline:
         self.ocr = OCREngine(ocr_engine)
         self.tts = TTSEngine(tts_engine)
         
-        # ANCHOR TO REPO ROOT
         self.repo_root = SCRIPT_DIR.parent
         self.output_dir = self.repo_root / "output"
         self.output_dir.mkdir(exist_ok=True)
@@ -42,7 +41,8 @@ class MangaToVideoPipeline:
 
     async def process_page(self, idx: int, orig_img: Path) -> Tuple[Path, Path, float]:
         proc_img = self.dirs["processed"] / f"page_{idx:04d}.jpg"
-        await asyncio.to_thread(resize_and_pad, orig_img, proc_img)
+        # UPDATED: Explicitly set mobile resolution for resizing
+        await asyncio.to_thread(resize_and_pad, orig_img, proc_img, (1080, 1920))
 
         text = await asyncio.to_thread(self.ocr.get_text, str(proc_img))
         text = text.strip() if text.strip() else "..."
@@ -50,7 +50,6 @@ class MangaToVideoPipeline:
         audio_file = self.dirs["audio"] / f"audio_{idx:04d}.mp3"
         await self.tts.generate(text, str(audio_file))
         
-        # FIXED: Added await because get_audio_duration is an async function
         duration = await get_audio_duration(audio_file)
         return proc_img, audio_file, duration
 
@@ -69,19 +68,16 @@ class MangaToVideoPipeline:
 
             return await self._render_final_video(segments)
         finally:
-            # FIXED: Added await because cleanup is an async function
             await self.tts.cleanup()
             cleanup_temp_dirs(self.temp_dir)
 
     async def _render_final_video(self, segments: List[Tuple[Path, Path, float]]) -> Path:
-        logger.info("🎬 Rendering final video...")
+        logger.info("🎬 Rendering final Mobile Video (1080x1920)...")
         
         concat_meta = self.temp_dir / "meta.txt"
         with open(concat_meta, "w") as f:
             for img, audio, dur in segments:
-                # FIXED: dur is now a float, not a coroutine object
                 f.write(f"file '{img.absolute()}'\nduration {dur}\n")
-            # FFmpeg concat requirement: repeat the last file without a duration
             f.write(f"file '{segments[-1][0].absolute()}'\n")
 
         audio_concat = self.temp_dir / "audio_list.txt"
@@ -92,15 +88,18 @@ class MangaToVideoPipeline:
         final_audio = self.temp_dir / "final_audio.mp3"
         subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(audio_concat), "-c", "copy", str(final_audio)], check=True)
 
+        # UPDATED: Added scale and pad filters to force 1080x1920 output
         cmd = [
             "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_meta),
-            "-i", str(final_audio), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-i", str(final_audio), 
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
             "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-shortest",
             str(self.output_video.absolute())
         ]
         
         await asyncio.to_thread(subprocess.run, cmd, check=True)
-        logger.info(f"✅ Video created: {self.output_video}")
+        logger.info(f"✅ Mobile Video created: {self.output_video}")
         return self.output_video
 
 async def main():
