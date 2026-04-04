@@ -50,7 +50,8 @@ class MangaToVideoPipeline:
         audio_file = self.dirs["audio"] / f"audio_{idx:04d}.mp3"
         await self.tts.generate(text, str(audio_file))
         
-        duration = await asyncio.to_thread(get_audio_duration, audio_file)
+        # FIXED: Added await because get_audio_duration is an async function
+        duration = await get_audio_duration(audio_file)
         return proc_img, audio_file, duration
 
     async def run(self) -> Path:
@@ -68,7 +69,8 @@ class MangaToVideoPipeline:
 
             return await self._render_final_video(segments)
         finally:
-            self.tts.cleanup()
+            # FIXED: Added await because cleanup is an async function
+            await self.tts.cleanup()
             cleanup_temp_dirs(self.temp_dir)
 
     async def _render_final_video(self, segments: List[Tuple[Path, Path, float]]) -> Path:
@@ -77,7 +79,9 @@ class MangaToVideoPipeline:
         concat_meta = self.temp_dir / "meta.txt"
         with open(concat_meta, "w") as f:
             for img, audio, dur in segments:
+                # FIXED: dur is now a float, not a coroutine object
                 f.write(f"file '{img.absolute()}'\nduration {dur}\n")
+            # FFmpeg concat requirement: repeat the last file without a duration
             f.write(f"file '{segments[-1][0].absolute()}'\n")
 
         audio_concat = self.temp_dir / "audio_list.txt"
