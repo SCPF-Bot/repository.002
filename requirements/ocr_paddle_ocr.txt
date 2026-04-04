@@ -1,3 +1,3 @@
+# Use paddle-bfloat for CPU speed if needed, but standard is fine
 paddlepaddle
 paddleocr>=2.6.0
-shutil
