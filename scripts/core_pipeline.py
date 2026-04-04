@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import os, sys, argparse, asyncio, logging, tempfile, subprocess
 from pathlib import Path
 from typing import List, Tuple
@@ -33,13 +32,10 @@ class MangaToVideoPipeline:
         text = await asyncio.to_thread(self.ocr.get_text, str(proc_img))
         audio_file = self.dirs["audio"] / f"audio_{idx:04d}.mp3"
         
-        # If text is empty, the TTS engine will generate 1.5s of silence
-        await self.tts.generate(text.strip() if text else "", str(audio_file))
-        
+        await self.tts.generate(text or "", str(audio_file))
         duration = await get_audio_duration(audio_file)
-        # Ensure silent/empty pages stay for exactly 1.5s
-        if duration < 0.2: duration = 1.5 
         
+        if duration < 0.2: duration = 1.5 # Forced 1.5s silence for empty pages
         return proc_img, audio_file, duration
 
     async def run(self) -> Path:
@@ -81,7 +77,10 @@ async def main():
     args = parser.parse_args()
     try:
         p = MangaToVideoPipeline(args.url, args.ocr, args.tts)
-        await p.run()
+        vid = await p.run()
+        # Report for GitHub Actions
+        print(f"ACTUAL_OCR={p.ocr.primary_engine}")
+        print(f"ACTUAL_TTS={p.tts.engine_type}")
     except Exception as e:
         logger.error(f"Failed: {e}"); sys.exit(1)
 
