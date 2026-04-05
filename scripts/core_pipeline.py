@@ -15,9 +15,14 @@ logger = logging.getLogger("MangaPipeline")
 class MangaToVideoPipeline:
     def __init__(self, url: str, ocr_engine: str, tts_engine: str):
         self.url = url
-        # Engine now includes internal cleaning
-        self.ocr = OCREngine(ocr_engine)
+        
+        # Fetch Gemini API key from environment variable
+        gemini_key = os.getenv("GOOGLE_API_KEY")
+        
+        # Pass the key to the OCR Engine for text cleaning
+        self.ocr = OCREngine(ocr_engine, api_key=gemini_key)
         self.tts = TTSEngine(tts_engine)
+        
         self.repo_root = SCRIPT_DIR.parent
         self.output_dir = self.repo_root / "output"
         self.output_dir.mkdir(exist_ok=True)
@@ -30,10 +35,10 @@ class MangaToVideoPipeline:
         proc_img = self.dirs["processed"] / f"page_{idx:04d}.jpg"
         await asyncio.to_thread(resize_and_pad, orig_img, proc_img, (1080, 1920))
         
-        # get_text now handles denoising and regex cleanup
+        # This now returns AI-cleaned text
         text = await asyncio.to_thread(self.ocr.get_text, str(proc_img))
-        audio_file = self.dirs["audio"] / f"audio_{idx:04d}.mp3"
         
+        audio_file = self.dirs["audio"] / f"audio_{idx:04d}.mp3"
         await self.tts.generate(text or "", str(audio_file))
         duration = await get_audio_duration(audio_file)
         
@@ -58,9 +63,9 @@ class MangaToVideoPipeline:
         meta, audio_list = self.temp_dir / "meta.txt", self.temp_dir / "audio_list.txt"
         with open(meta, "w") as f1, open(audio_list, "w") as f2:
             for i, a, d in segments:
-                f1.write(f"file '{i.absolute()}'\\nduration {d}\\n")
-                f2.write(f"file '{a.absolute()}'\\n")
-            f1.write(f"file '{segments[-1][0].absolute()}'\\n")
+                f1.write(f"file '{i.absolute()}'\nduration {d}\n")
+                f2.write(f"file '{a.absolute()}'\n")
+            f1.write(f"file '{segments[-1][0].absolute()}'\n")
 
         final_audio = self.temp_dir / "final_audio.mp3"
         subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(audio_list), "-c", "copy", str(final_audio)], check=True)
@@ -76,8 +81,7 @@ class MangaToVideoPipeline:
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", required=True)
-    # Defaulting to manga_ocr significantly reduces hallucination
-    parser.add_argument("--ocr", default="manga_ocr") 
+    parser.add_argument("--ocr", default="paddle_ocr")
     parser.add_argument("--tts", default="edge_tts")
     args = parser.parse_args()
     try:
@@ -88,5 +92,5 @@ async def main():
     except Exception as e:
         logger.error(f"Failed: {e}"); sys.exit(1)
 
-if __name__ == "__main__": 
+if __name__ == "__main__":
     asyncio.run(main())
