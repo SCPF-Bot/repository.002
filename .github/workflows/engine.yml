@@ -57,6 +57,13 @@ jobs:
             --ocr "${{ github.event.inputs.ocr_engine }}" \
             --tts "${{ github.event.inputs.tts_engine }}"
 
+      - name: Purge Local Namespace and Cache
+        run: |
+          # Remove any local files or folders that conflict with libraries
+          rm -rf manga_ocr/
+          find . -type d -name "__pycache__" -exec rm -rf {} +
+          find . -type f -name "*.pyc" -delete
+          
       - name: Run Manga Pipeline
         id: run_pipeline
         env:
