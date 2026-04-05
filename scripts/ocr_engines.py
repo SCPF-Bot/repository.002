@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class OCREngine:
     def __init__(self, engine_type: str = "manga_ocr"):
-        # Prioritize manga_ocr as it handles stylized fonts better than general OCR
+        # Prioritize manga_ocr for better handling of stylized fonts
         self.primary_engine = engine_type.lower()
         self.engines_to_try = [self.primary_engine]
         
@@ -26,7 +26,7 @@ class OCREngine:
 
     def _preprocess_for_ocr(self, image_path: str) -> str:
         """
-        Cleans the image by removing noise and forced binarization (Black/White).
+        Cleans the image by removing noise and forced binarization.
         This prevents the OCR from 'reading' background art textures.
         """
         img = cv2.imread(image_path)
@@ -48,7 +48,6 @@ class OCREngine:
         return temp_file
 
     def get_text(self, image_path: str) -> str:
-        # Step 1: Clean the image
         ready_image = self._preprocess_for_ocr(image_path)
         
         for engine in self.engines_to_try:
@@ -57,14 +56,13 @@ class OCREngine:
                 text = method(ready_image)
                 
                 if text:
-                    # Step 2: Clean the text output
-                    # Remove junk symbols (backslashes, underscores, brackets)
+                    # CLEANING STEP: Remove junk symbols (backslashes, underscores, brackets)
+                    # Keep only letters, numbers, and basic punctuation
                     text = re.sub(r'[^a-zA-Z0-9\s.,!?\'"-]', '', text)
                     # Standardize whitespace
                     text = re.sub(r'\s+', ' ', text).strip()
                     
                     if len(text) > 1:
-                        # Cleanup temp image if it was created
                         if ready_image != image_path and os.path.exists(ready_image):
                             os.remove(ready_image)
                         return text
@@ -107,6 +105,5 @@ class OCREngine:
 
     def _ocr_tesseract(self, image_path: str) -> str:
         import pytesseract
-        # Tesseract performs better on the pre-cleaned binary image
         img = cv2.imread(image_path)
         return pytesseract.image_to_string(img, config='--psm 3')
