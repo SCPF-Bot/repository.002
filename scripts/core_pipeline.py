@@ -15,7 +15,7 @@ logger = logging.getLogger("MangaPipeline")
 class MangaToVideoPipeline:
     def __init__(self, url: str, ocr_engine: str, tts_engine: str):
         self.url = url
-        # OCREngine now includes internal preprocessing and regex cleaning
+        # Engine now includes internal cleaning
         self.ocr = OCREngine(ocr_engine)
         self.tts = TTSEngine(tts_engine)
         self.repo_root = SCRIPT_DIR.parent
@@ -28,18 +28,15 @@ class MangaToVideoPipeline:
 
     async def process_page(self, idx: int, orig_img: Path) -> Tuple[Path, Path, float]:
         proc_img = self.dirs["processed"] / f"page_{idx:04d}.jpg"
-        # Standardize resolution for the video format
         await asyncio.to_thread(resize_and_pad, orig_img, proc_img, (1080, 1920))
         
-        # OCREngine.get_text now handles denoising and binarization automatically
+        # get_text now handles denoising and regex cleanup
         text = await asyncio.to_thread(self.ocr.get_text, str(proc_img))
         audio_file = self.dirs["audio"] / f"audio_{idx:04d}.mp3"
         
-        # Cleaned text is passed to TTS to prevent reading garbled symbols
         await self.tts.generate(text or "", str(audio_file))
         duration = await get_audio_duration(audio_file)
         
-        # Minimum duration to ensure the page is visible if text is short/empty
         if duration < 0.2: duration = 1.5 
         return proc_img, audio_file, duration
 
@@ -48,12 +45,9 @@ class MangaToVideoPipeline:
             archive_path = self.temp_dir / "manga.archive"
             await download_file(self.url, archive_path)
             image_paths = await extract_archive(archive_path, self.dirs["images"])
-            
-            # Limit concurrency to 4 to manage memory/CPU during heavy OCR tasks
             sem = asyncio.Semaphore(4)
             async def task(i, p):
                 async with sem: return await self.process_page(i, p)
-            
             segments = await asyncio.gather(*(task(i, p) for i, p in enumerate(image_paths)))
             return await self._render_final_video(segments)
         finally:
@@ -64,10 +58,9 @@ class MangaToVideoPipeline:
         meta, audio_list = self.temp_dir / "meta.txt", self.temp_dir / "audio_list.txt"
         with open(meta, "w") as f1, open(audio_list, "w") as f2:
             for i, a, d in segments:
-                f1.write(f"file '{i.absolute()}'\nduration {d}\n")
-                f2.write(f"file '{a.absolute()}'\n")
-            # FFMPEG concat requirement: repeat last frame
-            f1.write(f"file '{segments[-1][0].absolute()}'\n")
+                f1.write(f"file '{i.absolute()}'\\nduration {d}\\n")
+                f2.write(f"file '{a.absolute()}'\\n")
+            f1.write(f"file '{segments[-1][0].absolute()}'\\n")
 
         final_audio = self.temp_dir / "final_audio.mp3"
         subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(audio_list), "-c", "copy", str(final_audio)], check=True)
@@ -83,7 +76,7 @@ class MangaToVideoPipeline:
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", required=True)
-    # Defaulting to manga_ocr significantly reduces hallucination in manga bubbles
+    # Defaulting to manga_ocr significantly reduces hallucination
     parser.add_argument("--ocr", default="manga_ocr") 
     parser.add_argument("--tts", default="edge_tts")
     args = parser.parse_args()
