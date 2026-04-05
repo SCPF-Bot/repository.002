@@ -33,7 +33,6 @@ def check_package(package_name: str) -> bool:
         return True
     try:
         top_level = package_name.split('.')[0]
-        # Check for new genai module
         if top_level == "google":
             return importlib.util.find_spec("google.genai") is not None
         return importlib.util.find_spec(top_level) is not None
