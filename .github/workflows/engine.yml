@@ -38,7 +38,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # Upgraded to avoid Python 3.10 deprecation warnings
+          python-version: '3.11'
 
       - name: Install System Dependencies
         run: |
@@ -48,7 +48,7 @@ jobs:
       - name: Install Base Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          # Added google-genai to support the updated AI layer
+          # Ensure modern AI SDK is present for the cleaning layer
           pip install opencv-python pillow natsort aiohttp aiofiles edge-tts pytesseract google-genai 
 
       - name: JIT Install Engine Dependencies
@@ -57,13 +57,6 @@ jobs:
             --ocr "${{ github.event.inputs.ocr_engine }}" \
             --tts "${{ github.event.inputs.tts_engine }}"
 
-      - name: Purge Local Namespace and Cache
-        run: |
-          # Remove any local files or folders that conflict with libraries
-          rm -rf manga_ocr/
-          find . -type d -name "__pycache__" -exec rm -rf {} +
-          find . -type f -name "*.pyc" -delete
-          
       - name: Run Manga Pipeline
         id: run_pipeline
         env:
@@ -73,24 +66,30 @@ jobs:
           EDGE_TTS_VOICE: ${{ github.event.inputs.voice_id }}
           PYTHONPATH: ${{ github.workspace }}/scripts
         run: |
+          # --- NAMESPACE COLLISION FIX ---
+          # Delete local files/folders that conflict with library names
+          rm -f scripts/manga_ocr.py
+          rm -rf scripts/manga_ocr/
+          find . -type d -name "__pycache__" -exec rm -rf {} +
+          
           mkdir -p output
           python scripts/core_pipeline.py \
             --url "${{ github.event.inputs.url }}" \
             --ocr "${{ github.event.inputs.ocr_engine }}" \
             --tts "${{ github.event.inputs.tts_engine }}" | tee pipeline_log.txt
           
-          # Extract metadata for the release body
+          # Extract metadata for release notes
           echo "real_ocr=$(grep 'ACTUAL_OCR=' pipeline_log.txt | cut -d'=' -f2 || echo '${{ github.event.inputs.ocr_engine }}')" >> $GITHUB_OUTPUT
           echo "real_tts=$(grep 'ACTUAL_TTS=' pipeline_log.txt | cut -d'=' -f2 || echo '${{ github.event.inputs.tts_engine }}')" >> $GITHUB_OUTPUT
 
-      - name: Check for Output File
-        id: check_file
+      - name: Verify Output and Set Skip Flag
+        id: check_output
         run: |
           if [ -f "output/final_manga_video.mp4" ]; then
             echo "exists=true" >> $GITHUB_OUTPUT
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "::warning::Output video not found. Skipping release."
+            echo "::warning::No video found in output folder. Skipping release."
           fi
 
       - name: Calculate Duration
@@ -104,8 +103,8 @@ jobs:
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
-        # Only run if the pipeline succeeded AND the file actually exists
-        if: success() && steps.check_file.outputs.exists == 'true'
+        # Only create release if the pipeline succeeded AND the file actually exists
+        if: success() && steps.check_output.outputs.exists == 'true'
         with:
           files: output/final_manga_video.mp4
           tag_name: build-${{ github.run_id }}
