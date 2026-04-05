@@ -1,9 +1,10 @@
 import os
+import sys
 import cv2
 import logging
 import importlib.util
 import re
-from google import genai  # Updated from google.generativeai
+from google import genai  # Modernized Google AI SDK
 from typing import List, Any
 
 # Global environment flags for Paddle optimization
@@ -64,7 +65,13 @@ class OCREngine:
         return ""
 
     def _ocr_manga_ocr(self, image_path: str) -> str:
-        from manga_ocr import MangaOCR
+        # Robust import to avoid local namespace collisions
+        try:
+            from manga_ocr import MangaOCR
+        except ImportError:
+            logger.error(f"Namespace collision detected. Current Path: {sys.path}")
+            raise
+
         if self._model is None:
             self._model = MangaOCR()
         return self._model(image_path)
