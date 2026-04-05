@@ -13,11 +13,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 REQUIREMENTS_DIR = REPO_ROOT / "requirements"
 
+# OPTIMIZATION: Added google-generativeai to all OCR configs to support the AI Correction layer.
+# This prevents ModuleNotFoundError when ocr_engines.py is imported.
 OCR_CONFIG = {
-    "google_vision": ("ocr_google_vision.txt", ["google-cloud-vision"], "google"),
-    "manga_ocr": ("ocr_manga_ocr.txt", ["manga-ocr"], "manga_ocr"),
-    "paddle_ocr": ("ocr_paddle_ocr.txt", ["paddlepaddle", "paddleocr"], "paddleocr"),
-    "tesseract": (None, None, "pytesseract"),
+    "google_vision": ("ocr_google_vision.txt", ["google-cloud-vision", "google-generativeai"], "google"),
+    "manga_ocr": ("ocr_manga_ocr.txt", ["manga-ocr", "google-generativeai"], "manga_ocr"),
+    "paddle_ocr": ("ocr_paddle_ocr.txt", ["paddlepaddle", "paddleocr", "google-generativeai"], "paddleocr"),
+    "tesseract": (None, ["google-generativeai", "pytesseract"], "pytesseract"),
 }
 
 TTS_CONFIG = {
@@ -34,11 +36,19 @@ def check_package(package_name: str) -> bool:
     try:
         # Check only the top-level package to avoid Namespace errors
         top_level = package_name.split('.')[0]
+        # Special check for google-generativeai which uses 'google' namespace
+        if top_level == "google":
+            return importlib.util.find_spec("google.generativeai") is not None
         return importlib.util.find_spec(top_level) is not None
     except (ModuleNotFoundError, AttributeError, ValueError):
         return False
 
 def install_deps(req_filename: str, fallback_pkgs: list, import_name: str):
+    # Always ensure google-generativeai is present first as it is now a base requirement
+    if not check_package("google.generativeai"):
+        logger.info("Installing required AI correction layer (google-generativeai)...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "google-generativeai"])
+
     if check_package(import_name):
         logger.info(f"✅ {import_name} is already installed. Skipping.")
         return
